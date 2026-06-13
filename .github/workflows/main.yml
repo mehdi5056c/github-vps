@@ -32,10 +32,8 @@ jobs:
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
         with:
-          # Updated parameters to match Tailscale's modern OAuth standard
-          oauth-client-id: ${{ secrets.TAILSCALE_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_CLIENT_SECRET }}
-          tags: tag:server
+          # Using the direct authkey configuration to match your tskey-auth token
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
       - name: Restore Previous Session Data
         run: |
