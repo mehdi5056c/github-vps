@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 */5 * * *' 
 
+env:
+  # Opts into the updated runner environment to clean up platform warnings
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-vps:
     runs-on: ubuntu-latest
@@ -24,7 +28,6 @@ jobs:
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo service ssh restart
           
-          # Create workspace inside the runner's home directory to avoid permission issues
           mkdir -p /home/runner/workspace
 
       - name: Install & Configure Ngrok
@@ -32,14 +35,21 @@ jobs:
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com/ buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install ngrok
-          ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+          
+          # Safety check: if secret is empty, fail with a clear message instead of an ugly syntax crash
+          if [ -z "${{ secrets.NGROK_AUTH_TOKEN }}" ]; then
+            echo "ERROR: NGROK_AUTH_TOKEN secret is missing in your GitHub Settings!"
+            exit 1
+          fi
+          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
 
       - name: Restore Previous Session Data
         run: |
           cd /home/runner
           if [ ! -z "${{ secrets.BACKUP_DOWNLOAD_URL }}" ]; then
             echo "Found previous backup. Restoring files..."
-            wget -O backup.zip "${{ secrets.BACKUP_DOWNLOAD_URL }}" || echo "No backup found online yet."
+            # Using -k / --no-check-certificate to prevent any unexpected SSL blocks on download
+            wget --no-check-certificate -O backup.zip "${{ secrets.BACKUP_DOWNLOAD_URL }}" || echo "No active backup found online yet."
             if [ -f backup.zip ]; then
               unzip -o backup.zip -d /home/runner/workspace
               rm backup.zip
@@ -62,7 +72,7 @@ jobs:
           echo "   ssh root@your-ngrok-host -p your-ngrok-port"
           echo "   Password is: VpsPassword2026!"
           echo "===================================================="
-          echo "IMPORTANT: ALWAYS SAVE YOUR WORK INSIDE: /home/runner/workspace"
+          echo "IMPORTANT: ALWAYS WORK INSIDE: /home/runner/workspace"
           echo "===================================================="
           
           DURATION=18000
@@ -75,18 +85,23 @@ jobs:
       - name: Automated Session Backup
         if: always() 
         run: |
-          echo "5-hour shift ended. Packaging workspace to prevent data loss..."
+          echo "5-hour shift ended. Packaging workspace..."
           cd /home/runner
           if [ -d "workspace" ]; then
             zip -r backup.zip workspace
             
-            UPLOAD_LOG=$(curl -F "file=@backup.zip" https://bashupload.com/)
-            DOWNLOAD_LINK=$(echo "$UPLOAD_LOG" | grep -o 'https://bashupload.com/[^ ]*')
+            # Using Pixeldrain API instead since Bashupload has an expired SSL configuration
+            UPLOAD_LOG=$(curl -k -F "file=@backup.zip" https://pixeldrain.com/api/file/)
+            FILE_ID=$(echo "$UPLOAD_LOG" | grep -o '"id":"[^"]*' | grep -o '[^"]*$')
             
-            echo "===================================================="
-            echo "BACKUP SUCCESSFUL"
-            echo "Your data has been preserved."
-            echo "Update your repository secret 'BACKUP_DOWNLOAD_URL' with this link:"
-            echo "$DOWNLOAD_LINK"
-            echo "===================================================="
+            if [ ! -z "$FILE_ID" ]; then
+              DOWNLOAD_LINK="https://pixeldrain.com/api/file/$FILE_ID"
+              echo "===================================================="
+              echo "BACKUP SUCCESSFUL"
+              echo "Update your repository secret 'BACKUP_DOWNLOAD_URL' with this link:"
+              echo "$DOWNLOAD_LINK"
+              echo "===================================================="
+            else
+              echo "Backup file upload failed."
+            fi
           fi
