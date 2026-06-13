@@ -1,9 +1,9 @@
 name: 15-Day Continuous VPS
 
 on:
-  workflow_dispatch: # Allows you to start it manually from the Actions tab
+  workflow_dispatch: 
   schedule:
-    - cron: '0 */5 * * *' # Automatically restarts every 5 hours to bypass GitHub's 6-hour limit
+    - cron: '0 */5 * * *' 
 
 jobs:
   run-vps:
@@ -24,8 +24,8 @@ jobs:
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo service ssh restart
           
-          # Create your persistent workspace folder
-          mkdir -p /root/workspace
+          # Create workspace inside the runner's home directory to avoid permission issues
+          mkdir -p /home/runner/workspace
 
       - name: Install & Configure Ngrok
         run: |
@@ -36,23 +36,21 @@ jobs:
 
       - name: Restore Previous Session Data
         run: |
-          cd /root
-          # Checks if you have a previously saved session token stored in GitHub Secrets
+          cd /home/runner
           if [ ! -z "${{ secrets.BACKUP_DOWNLOAD_URL }}" ]; then
             echo "Found previous backup. Restoring files..."
             wget -O backup.zip "${{ secrets.BACKUP_DOWNLOAD_URL }}" || echo "No backup found online yet."
             if [ -f backup.zip ]; then
-              unzip -o backup.zip -d /root/workspace
+              unzip -o backup.zip -d /home/runner/workspace
               rm backup.zip
             fi
           else
             echo "First-time setup or no backup URL configured. Starting fresh."
-            echo "# Put your project files inside /root/workspace to keep them safe" > /root/workspace/README.txt
+            echo "# Put your project files inside /home/runner/workspace to keep them safe" > /home/runner/workspace/README.txt
           fi
 
       - name: Start Network Tunnel & Run Cycle
         run: |
-          # Launch Ngrok tunnel in a background screen session
           screen -dmS ngrok_tunnel ngrok tcp 22
           
           echo "===================================================="
@@ -64,11 +62,9 @@ jobs:
           echo "   ssh root@your-ngrok-host -p your-ngrok-port"
           echo "   Password is: VpsPassword2026!"
           echo "===================================================="
-          echo "IMPORTANT: ALWAYS SAVE YOUR WORK INSIDE: /root/workspace"
+          echo "IMPORTANT: ALWAYS SAVE YOUR WORK INSIDE: /home/runner/workspace"
           echo "===================================================="
           
-          # Countdown loop for 5 hours (18000 seconds)
-          # Keeps the job active, then leaves 30 minutes for graceful backup and exit
           DURATION=18000
           while [ $DURATION -gt 0 ]; do
             echo "VPS status: Active. Time remaining in this shift: ${DURATION}s"
@@ -77,23 +73,20 @@ jobs:
           done
 
       - name: Automated Session Backup
-        if: always() # Runs even if the steps above encounter an error
+        if: always() 
         run: |
-          echo "5-hour shift ended. Packaging /root/workspace to prevent data loss..."
-          cd /root
+          echo "5-hour shift ended. Packaging workspace to prevent data loss..."
+          cd /home/runner
           if [ -d "workspace" ]; then
             zip -r backup.zip workspace
             
-            # Uploads the zip file to a free anonymous file sharing bin (bashupload)
-            # This generates a temporary download link valid for the next runner cycle
             UPLOAD_LOG=$(curl -F "file=@backup.zip" https://bashupload.com/)
             DOWNLOAD_LINK=$(echo "$UPLOAD_LOG" | grep -o 'https://bashupload.com/[^ ]*')
             
             echo "===================================================="
             echo "BACKUP SUCCESSFUL"
             echo "Your data has been preserved."
-            echo "If you want the next server instance to load this data automatically,"
-            echo "update your repository secret 'BACKUP_DOWNLOAD_URL' with this link:"
+            echo "Update your repository secret 'BACKUP_DOWNLOAD_URL' with this link:"
             echo "$DOWNLOAD_LINK"
             echo "===================================================="
           fi
