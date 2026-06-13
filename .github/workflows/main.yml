@@ -1,4 +1,4 @@
-name: 15-Day Continuous VPS
+name: 15-Day Continuous VPS (Tailscale)
 
 on:
   workflow_dispatch: 
@@ -29,22 +29,10 @@ jobs:
           
           mkdir -p /home/runner/workspace
 
-      - name: Install & Configure Ngrok
-        run: |
-          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-          echo "deb https://ngrok-agent.s3.amazonaws.com/ buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-          sudo apt-get update && sudo apt-get install ngrok
-          
-          # Validation check for secret
-          if [ -z "${{ secrets.NGROK_AUTH_TOKEN }}" ]; then
-            echo "===================================================="
-            echo "ERROR: NGROK_AUTH_TOKEN IS EMPTY!"
-            echo "Please go to Settings -> Secrets and variables -> Actions"
-            echo "Create a new secret named NGROK_AUTH_TOKEN and paste your token."
-            echo "===================================================="
-            exit 1
-          fi
-          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
       - name: Restore Previous Session Data
         run: |
@@ -62,17 +50,17 @@ jobs:
             echo "# Put your data here" > /home/runner/workspace/README.txt
           fi
 
-      - name: Start Network Tunnel & Run Cycle
+      - name: Start Network & Run Cycle
         run: |
-          screen -dmS ngrok_tunnel ngrok tcp 22
+          # Fetch the assigned Tailscale IP address
+          TAILSCALE_IP=$(tailscale ip -4)
           
           echo "===================================================="
-          echo " VPS ONLINE AND RUNNING NORMAL"
+          echo " VPS ONLINE AND RUNNING NORMAL ON TAILSCALE"
           echo "===================================================="
-          echo "1. Go to: https://dashboard.ngrok.com/endpoints/status"
-          echo "2. Copy the TCP address (e.g., 0.tcp.ngrok.io:12345)"
-          echo "3. Connect in your terminal using:"
-          echo "   ssh root@your-ngrok-host -p your-ngrok-port"
+          echo "Your Fixed Tailscale VPS IP is: $TAILSCALE_IP"
+          echo "Connect in your terminal using:"
+          echo "   ssh root@$TAILSCALE_IP"
           echo "   Password is: VpsPassword2026!"
           echo "===================================================="
           echo "IMPORTANT: ALWAYS SAVE YOUR WORK INSIDE: /home/runner/workspace"
@@ -89,13 +77,11 @@ jobs:
         if: always() 
         run: |
           cd /home/runner
-          # Only attempt backup if workspace exists and the previous build actually ran
           if [ -d "workspace" ] && [ -f "workspace/README.txt" ] || [ "$(ls -A workspace 2>/dev/null)" ]; then
             echo "Packaging current workspace environment..."
             zip -r backup.zip workspace
             
             echo "Uploading backup archive..."
-            # Using transfer.sh as a highly stable alternative that returns a clean string URL
             DOWNLOAD_LINK=$(curl --insecure --upload-file ./backup.zip https://transfer.sh/backup.zip)
             
             if [ ! -z "$DOWNLOAD_LINK" ]; then
@@ -108,5 +94,5 @@ jobs:
               echo "Backup service upload failed."
             fi
           else
-            echo "Workspace is empty or startup was cancelled. Skipping backup processing."
+            echo "Workspace empty or run skipped. Skipping backup."
           fi
