@@ -6,7 +6,6 @@ on:
     - cron: '0 */5 * * *' 
 
 env:
-  # Opts into the updated runner environment to clean up platform warnings
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -36,9 +35,13 @@ jobs:
           echo "deb https://ngrok-agent.s3.amazonaws.com/ buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install ngrok
           
-          # Safety check: if secret is empty, fail with a clear message instead of an ugly syntax crash
+          # Validation check for secret
           if [ -z "${{ secrets.NGROK_AUTH_TOKEN }}" ]; then
-            echo "ERROR: NGROK_AUTH_TOKEN secret is missing in your GitHub Settings!"
+            echo "===================================================="
+            echo "ERROR: NGROK_AUTH_TOKEN IS EMPTY!"
+            echo "Please go to Settings -> Secrets and variables -> Actions"
+            echo "Create a new secret named NGROK_AUTH_TOKEN and paste your token."
+            echo "===================================================="
             exit 1
           fi
           ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
@@ -47,16 +50,16 @@ jobs:
         run: |
           cd /home/runner
           if [ ! -z "${{ secrets.BACKUP_DOWNLOAD_URL }}" ]; then
-            echo "Found previous backup. Restoring files..."
-            # Using -k / --no-check-certificate to prevent any unexpected SSL blocks on download
-            wget --no-check-certificate -O backup.zip "${{ secrets.BACKUP_DOWNLOAD_URL }}" || echo "No active backup found online yet."
+            echo "Found previous backup link. Attempting restoration..."
+            wget --no-check-certificate -O backup.zip "${{ secrets.BACKUP_DOWNLOAD_URL }}" || echo "Download link expired or invalid."
             if [ -f backup.zip ]; then
               unzip -o backup.zip -d /home/runner/workspace
               rm backup.zip
+              echo "Restoration complete."
             fi
           else
-            echo "First-time setup or no backup URL configured. Starting fresh."
-            echo "# Put your project files inside /home/runner/workspace to keep them safe" > /home/runner/workspace/README.txt
+            echo "First-time launch. Workspace ready."
+            echo "# Put your data here" > /home/runner/workspace/README.txt
           fi
 
       - name: Start Network Tunnel & Run Cycle
@@ -72,7 +75,7 @@ jobs:
           echo "   ssh root@your-ngrok-host -p your-ngrok-port"
           echo "   Password is: VpsPassword2026!"
           echo "===================================================="
-          echo "IMPORTANT: ALWAYS WORK INSIDE: /home/runner/workspace"
+          echo "IMPORTANT: ALWAYS SAVE YOUR WORK INSIDE: /home/runner/workspace"
           echo "===================================================="
           
           DURATION=18000
@@ -85,23 +88,25 @@ jobs:
       - name: Automated Session Backup
         if: always() 
         run: |
-          echo "5-hour shift ended. Packaging workspace..."
           cd /home/runner
-          if [ -d "workspace" ]; then
+          # Only attempt backup if workspace exists and the previous build actually ran
+          if [ -d "workspace" ] && [ -f "workspace/README.txt" ] || [ "$(ls -A workspace 2>/dev/null)" ]; then
+            echo "Packaging current workspace environment..."
             zip -r backup.zip workspace
             
-            # Using Pixeldrain API instead since Bashupload has an expired SSL configuration
-            UPLOAD_LOG=$(curl -k -F "file=@backup.zip" https://pixeldrain.com/api/file/)
-            FILE_ID=$(echo "$UPLOAD_LOG" | grep -o '"id":"[^"]*' | grep -o '[^"]*$')
+            echo "Uploading backup archive..."
+            # Using transfer.sh as a highly stable alternative that returns a clean string URL
+            DOWNLOAD_LINK=$(curl --insecure --upload-file ./backup.zip https://transfer.sh/backup.zip)
             
-            if [ ! -z "$FILE_ID" ]; then
-              DOWNLOAD_LINK="https://pixeldrain.com/api/file/$FILE_ID"
+            if [ ! -z "$DOWNLOAD_LINK" ]; then
               echo "===================================================="
               echo "BACKUP SUCCESSFUL"
-              echo "Update your repository secret 'BACKUP_DOWNLOAD_URL' with this link:"
+              echo "Copy this link and update your repository secret 'BACKUP_DOWNLOAD_URL':"
               echo "$DOWNLOAD_LINK"
               echo "===================================================="
             else
-              echo "Backup file upload failed."
+              echo "Backup service upload failed."
             fi
+          else
+            echo "Workspace is empty or startup was cancelled. Skipping backup processing."
           fi
