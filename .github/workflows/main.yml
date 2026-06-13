@@ -1,0 +1,99 @@
+name: 15-Day Continuous VPS
+
+on:
+  workflow_dispatch: # Allows you to start it manually from the Actions tab
+  schedule:
+    - cron: '0 */5 * * *' # Automatically restarts every 5 hours to bypass GitHub's 6-hour limit
+
+jobs:
+  run-vps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure System & SSH Server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server build-essential curl wget screen zip unzip
+          sudo mkdir -p /var/run/sshd
+          
+          # Set the SSH login credentials
+          echo 'root:VpsPassword2026!' | sudo chpasswd
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo service ssh restart
+          
+          # Create your persistent workspace folder
+          mkdir -p /root/workspace
+
+      - name: Install & Configure Ngrok
+        run: |
+          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com/ buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt-get update && sudo apt-get install ngrok
+          ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+      - name: Restore Previous Session Data
+        run: |
+          cd /root
+          # Checks if you have a previously saved session token stored in GitHub Secrets
+          if [ ! -z "${{ secrets.BACKUP_DOWNLOAD_URL }}" ]; then
+            echo "Found previous backup. Restoring files..."
+            wget -O backup.zip "${{ secrets.BACKUP_DOWNLOAD_URL }}" || echo "No backup found online yet."
+            if [ -f backup.zip ]; then
+              unzip -o backup.zip -d /root/workspace
+              rm backup.zip
+            fi
+          else
+            echo "First-time setup or no backup URL configured. Starting fresh."
+            echo "# Put your project files inside /root/workspace to keep them safe" > /root/workspace/README.txt
+          fi
+
+      - name: Start Network Tunnel & Run Cycle
+        run: |
+          # Launch Ngrok tunnel in a background screen session
+          screen -dmS ngrok_tunnel ngrok tcp 22
+          
+          echo "===================================================="
+          echo " VPS ONLINE AND RUNNING NORMAL"
+          echo "===================================================="
+          echo "1. Go to: https://dashboard.ngrok.com/endpoints/status"
+          echo "2. Copy the TCP address (e.g., 0.tcp.ngrok.io:12345)"
+          echo "3. Connect in your terminal using:"
+          echo "   ssh root@your-ngrok-host -p your-ngrok-port"
+          echo "   Password is: VpsPassword2026!"
+          echo "===================================================="
+          echo "IMPORTANT: ALWAYS SAVE YOUR WORK INSIDE: /root/workspace"
+          echo "===================================================="
+          
+          # Countdown loop for 5 hours (18000 seconds)
+          # Keeps the job active, then leaves 30 minutes for graceful backup and exit
+          DURATION=18000
+          while [ $DURATION -gt 0 ]; do
+            echo "VPS status: Active. Time remaining in this shift: ${DURATION}s"
+            sleep 300
+            DURATION=$((DURATION - 300))
+          done
+
+      - name: Automated Session Backup
+        if: always() # Runs even if the steps above encounter an error
+        run: |
+          echo "5-hour shift ended. Packaging /root/workspace to prevent data loss..."
+          cd /root
+          if [ -d "workspace" ]; then
+            zip -r backup.zip workspace
+            
+            # Uploads the zip file to a free anonymous file sharing bin (bashupload)
+            # This generates a temporary download link valid for the next runner cycle
+            UPLOAD_LOG=$(curl -F "file=@backup.zip" https://bashupload.com/)
+            DOWNLOAD_LINK=$(echo "$UPLOAD_LOG" | grep -o 'https://bashupload.com/[^ ]*')
+            
+            echo "===================================================="
+            echo "BACKUP SUCCESSFUL"
+            echo "Your data has been preserved."
+            echo "If you want the next server instance to load this data automatically,"
+            echo "update your repository secret 'BACKUP_DOWNLOAD_URL' with this link:"
+            echo "$DOWNLOAD_LINK"
+            echo "===================================================="
+          fi
