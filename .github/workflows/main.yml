@@ -1,4 +1,4 @@
-name: 15-Day Continuous VPS (Tailscale Fixed)
+name: 15-Day Continuous VPS (Tailscale Fully Fixed)
 
 on:
   workflow_dispatch: 
@@ -21,19 +21,21 @@ jobs:
           sudo apt-get install -y openssh-server build-essential curl wget screen zip unzip
           sudo mkdir -p /var/run/sshd
           
-          # Set the SSH login credentials
+          # Set up root SSH login privileges correctly
           echo 'root:VpsPassword2026!' | sudo chpasswd
           sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo service ssh restart
           
+          # Use user directory to completely avoid permission denied errors
           mkdir -p /home/runner/workspace
 
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
         with:
-          # Using the direct authkey configuration to match your tskey-auth token
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          # Prevents container routing conflicts within the runner environment
+          args: --snat-subnet-routes=false --accept-dns=false
 
       - name: Restore Previous Session Data
         run: |
@@ -78,11 +80,12 @@ jobs:
         if: always() 
         run: |
           cd /home/runner
-          if [ -d "workspace" ] && [ -f "workspace/README.txt" ] || [ "$(ls -A workspace 2>/dev/null)" ]; then
+          if [ -d "workspace" ]; then
             echo "Packaging current workspace environment..."
             zip -r backup.zip workspace
             
             echo "Uploading backup archive..."
+            # Added --insecure (-k) flag to totally bypass any SSL certificate expiration errors
             DOWNLOAD_LINK=$(curl --insecure --upload-file ./backup.zip https://transfer.sh/backup.zip)
             
             if [ ! -z "$DOWNLOAD_LINK" ]; then
@@ -95,5 +98,5 @@ jobs:
               echo "Backup service upload failed."
             fi
           else
-            echo "Workspace empty or run skipped. Skipping backup."
+            echo "Workspace directory not found. Skipping backup step."
           fi
